@@ -6,10 +6,12 @@ Then open http://localhost:8080
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import json
+import os
 import urllib.parse
 from pathlib import Path
 import sys
 
+# Fix imports for Render
 sys.path.insert(0, str(Path(__file__).parent))
 
 from engine.engine import AssetLibrary, VariationEngine
