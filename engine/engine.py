@@ -18,7 +18,7 @@ class AssetLibrary:
 
     def __init__(self):
         self.assets: Dict[str, Asset] = {}
-        self.data_dir = Path("/workspace/artifacts/affz_trial_engine/data")
+        self.data_dir = Path(__file__).parent.parent / "data"
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def add_asset(self, filename: str, path: str = "", asset_type: AssetType = AssetType.PHOTO,
