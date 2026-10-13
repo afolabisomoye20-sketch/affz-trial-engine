@@ -8,11 +8,12 @@ import os
 import urllib.parse
 from pathlib import Path
 import sys
+import cgi
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from engine.engine import AssetLibrary, VariationEngine
-from engine.photo_intake import scan_folder
+from engine.photo_intake import scan_folder, infer_categories
 from templates.templates import get_all_templates
 
 
@@ -36,14 +37,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
         if self.path == "/api/upload":
-            # Simple acknowledgment for now
-            self.send_json({"status": "ok", "count": 1, "message": "Files received. Processing coming soon."})
+            self.handle_upload()
             return
 
+        length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode() if length else "{}"
-        data = json.loads(body) if body else {}
+        try:
+            data = json.loads(body) if body else {}
+        except:
+            data = {}
 
         if self.path == "/api/scan":
             folder = data.get("folder", "data/sample_photos")
@@ -58,7 +61,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         elif self.path == "/api/generate":
             if not engine:
-                self.send_json({"status": "error", "message": "Upload or scan first"}, 400)
+                self.send_json({"status": "error", "message": "Upload files first"}, 400)
                 return
             template_id = data.get("template", "transform_years")
             count = int(data.get("count", 5))
@@ -70,6 +73,49 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json({"status": "error", "message": str(e)}, 500)
         else:
             self.send_error(404)
+
+    def handle_upload(self):
+        """Handle multipart file upload and add to library."""
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            self.send_json({"status": "error", "message": "Expected multipart form"}, 400)
+            return
+
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type}
+        )
+
+        uploaded = 0
+        upload_dir = Path(__file__).parent / "data" / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        if "files" in form:
+            files = form["files"]
+            if not isinstance(files, list):
+                files = [files]
+            for item in files:
+                if getattr(item, "filename", None):
+                    safe_name = Path(item.filename).name
+                    dest = upload_dir / safe_name
+                    with open(dest, "wb") as f:
+                        f.write(item.file.read())
+
+                    cats = infer_categories(safe_name)
+                    library.add_asset(
+                        filename=safe_name,
+                        path=str(dest),
+                        categories=cats,
+                        face_detected=True,
+                        quality_score=0.85
+                    )
+                    uploaded += 1
+
+        global engine
+        engine = VariationEngine(library)
+        library.save()
+        self.send_json({"status": "ok", "count": uploaded})
 
     def send_json(self, obj, status=200):
         self.send_response(status)
@@ -88,7 +134,7 @@ class Handler(SimpleHTTPRequestHandler):
     body { font-family: system-ui; max-width: 800px; margin: 20px auto; padding: 16px; background: #111; color: #eee; }
     button { padding: 12px 20px; margin: 8px 0; background: #333; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
     button:hover { background: #555; }
-    input[type="file"] { margin: 10px 0; }
+    input[type="file"] { margin: 10px 0; color: #eee; }
     pre { background: #222; padding: 15px; overflow: auto; border-radius: 6px; }
     h1 { color: #fff; }
   </style>
@@ -123,11 +169,16 @@ class Handler(SimpleHTTPRequestHandler):
         document.getElementById('uploadResult').innerText = 'Select files first';
         return;
       }
+      document.getElementById('uploadResult').innerText = 'Uploading...';
       const formData = new FormData();
       for (let f of files) formData.append('files', f);
-      const r = await fetch('/api/upload', {method:'POST', body: formData});
-      const d = await r.json();
-      document.getElementById('uploadResult').innerText = d.status === 'ok' ? `Uploaded ${d.count} files` : (d.message || 'Error');
+      try {
+        const r = await fetch('/api/upload', {method:'POST', body: formData});
+        const d = await r.json();
+        document.getElementById('uploadResult').innerText = d.status === 'ok' ? `Uploaded ${d.count} files` : (d.message || 'Error');
+      } catch (e) {
+        document.getElementById('uploadResult').innerText = 'Upload failed: ' + e;
+      }
     }
     async function generate() {
       const template = document.getElementById('template').value;
