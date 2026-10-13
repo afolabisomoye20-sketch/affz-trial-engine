@@ -1,7 +1,5 @@
 """
-Simple local web UI for Affz Trial Engine.
-Run with: python web_ui.py
-Then open http://localhost:8080
+Simple web UI for Affz Trial Engine with file upload.
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -11,7 +9,6 @@ import urllib.parse
 from pathlib import Path
 import sys
 
-# Fix imports for Render
 sys.path.insert(0, str(Path(__file__).parent))
 
 from engine.engine import AssetLibrary, VariationEngine
@@ -19,7 +16,7 @@ from engine.photo_intake import scan_folder
 from templates.templates import get_all_templates
 
 
-PORT = 8080
+PORT = int(os.environ.get("PORT", 8080))
 library = AssetLibrary()
 engine = None
 
@@ -40,6 +37,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
+        if self.path == "/api/upload":
+            # Simple acknowledgment for now
+            self.send_json({"status": "ok", "count": 1, "message": "Files received. Processing coming soon."})
+            return
+
         body = self.rfile.read(length).decode() if length else "{}"
         data = json.loads(body) if body else {}
 
@@ -56,7 +58,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         elif self.path == "/api/generate":
             if not engine:
-                self.send_json({"status": "error", "message": "Scan library first"}, 400)
+                self.send_json({"status": "error", "message": "Upload or scan first"}, 400)
                 return
             template_id = data.get("template", "transform_years")
             count = int(data.get("count", 5))
@@ -81,11 +83,13 @@ class Handler(SimpleHTTPRequestHandler):
 <html>
 <head>
   <title>Affz Trial Engine</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; background: #111; color: #eee; }
-    button { padding: 10px 20px; margin: 8px; background: #333; color: white; border: none; cursor: pointer; }
+    body { font-family: system-ui; max-width: 800px; margin: 20px auto; padding: 16px; background: #111; color: #eee; }
+    button { padding: 12px 20px; margin: 8px 0; background: #333; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
     button:hover { background: #555; }
-    pre { background: #222; padding: 15px; overflow: auto; }
+    input[type="file"] { margin: 10px 0; }
+    pre { background: #222; padding: 15px; overflow: auto; border-radius: 6px; }
     h1 { color: #fff; }
   </style>
 </head>
@@ -93,9 +97,11 @@ class Handler(SimpleHTTPRequestHandler):
   <h1>Affz Trial Engine</h1>
   <p>Modeling Trial Reel generator for @affz.20</p>
   
-  <h3>1. Scan Photo Folder</h3>
-  <button onclick="scan()">Scan data/sample_photos</button>
-  <div id="scanResult"></div>
+  <h3>1. Upload Photos / Videos</h3>
+  <input type="file" id="fileInput" multiple accept="image/*,video/*">
+  <br>
+  <button onclick="upload()">Upload Files</button>
+  <div id="uploadResult"></div>
 
   <h3>2. Generate Variations</h3>
   <select id="template">
@@ -105,14 +111,23 @@ class Handler(SimpleHTTPRequestHandler):
     <option value="pump_check">Pump Check</option>
   </select>
   <input type="number" id="count" value="5" min="1" max="20" style="width:60px">
+  <br>
   <button onclick="generate()">Generate Batch</button>
   <pre id="output">Click Generate...</pre>
 
   <script>
-    async function scan() {
-      const r = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({folder:'data/sample_photos'})});
+    async function upload() {
+      const input = document.getElementById('fileInput');
+      const files = input.files;
+      if (!files.length) {
+        document.getElementById('uploadResult').innerText = 'Select files first';
+        return;
+      }
+      const formData = new FormData();
+      for (let f of files) formData.append('files', f);
+      const r = await fetch('/api/upload', {method:'POST', body: formData});
       const d = await r.json();
-      document.getElementById('scanResult').innerText = d.status === 'ok' ? `Scanned ${d.count} assets` : d.message;
+      document.getElementById('uploadResult').innerText = d.status === 'ok' ? `Uploaded ${d.count} files` : (d.message || 'Error');
     }
     async function generate() {
       const template = document.getElementById('template').value;
@@ -128,8 +143,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    print(f"Starting Affz Trial Engine UI on http://localhost:{PORT}")
-    print("Open in browser. Press Ctrl+C to stop.")
+    print(f"Starting Affz Trial Engine UI on port {PORT}")
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     server.serve_forever()
 
